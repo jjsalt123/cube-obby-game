@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cube Obby</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: linear-gradient(#8ed1ff, #dff4ff);
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #hud {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      color: white;
+      font-weight: 700;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      user-select: none;
+      pointer-events: none;
+      font-size: 24px;
+    }
+
+    #message {
+      position: absolute;
+      left: 50%;
+      top: 18px;
+      transform: translateX(-50%);
+      color: white;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 12px;
+      padding: 10px 18px;
+      font-weight: bold;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      user-select: none;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+    }
+
+    #tag {
+      position: absolute;
+      right: 20px;
+      bottom: 18px;
+      color: rgba(255,255,255,0.9);
+      background: rgba(0,0,0,0.22);
+      border: 1px solid rgba(255,255,255,0.2);
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 12px;
+      letter-spacing: 1px;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #controls {
+      position: absolute;
+      bottom: 18px;
+      left: 18px;
+      color: rgba(255,255,255,0.8);
+      background: rgba(0,0,0,0.22);
+      border: 1px solid rgba(255,255,255,0.2);
+      padding: 10px 15px;
+      border-radius: 10px;
+      font-size: 13px;
+      user-select: none;
+      pointer-events: none;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">Level 1</div>
+  <div id="message">Reach the green finish pad</div>
+  <div id="controls">
+    WASD/Arrow Keys: Move | Space: Jump | R: Reset
+  </div>
+  <div id="tag">CUBE OBBY</div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x9ad8ff);
+    scene.fog = new THREE.Fog(0x9ad8ff, 100, 200);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+    camera.position.set(0, 5, -25);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x6a8aa6, 1.2);
+    scene.add(ambient);
+
+    const sun = new THREE.DirectionalLight(0xffffff, 1.25);
+    sun.position.set(8, 16, 8);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -60;
+    sun.shadow.camera.right = 60;
+    sun.shadow.camera.top = 60;
+    sun.shadow.camera.bottom = -60;
+    sun.shadow.far = 200;
+    scene.add(sun);
+
+    const keys = {};
+    window.addEventListener("keydown", (event) => {
+      keys[event.code] = true;
+      if (event.code === "Space") event.preventDefault();
+    });
+    window.addEventListener("keyup", (event) => {
+      keys[event.code] = false;
+    });
+
+    const hud = document.getElementById("hud");
+    const message = document.getElementById("message");
+
+    const playerGroup = new THREE.Group();
+    const playerBody = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0x86d8ff, metalness: 0.3, roughness: 0.4 })
+    );
+    playerBody.castShadow = true;
+    playerBody.receiveShadow = true;
+    playerGroup.add(playerBody);
+
+    const eye = new THREE.Mesh(
+      new THREE.BoxGeometry(0.25, 0.25, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0x2d2d2d })
+    );
+    eye.position.set(0, 0.18, 0.52);
+    playerGroup.add(eye);
+
+    scene.add(playerGroup);
+
+    // Physics system
+    const world = {
+      player: {
+        speed: 12,
+        jumpForce: 12,
+        gravity: 35,
+        width: 0.9,
+        height: 1,
+        depth: 0.9,
+        velocity: new THREE.Vector3(),
+        pos: new THREE.Vector3(),
+        onGround: false,
+        groundTimer: 0
+      },
+      levels: [],
+      currentLevel: 0,
+      platforms: []
+    };
+
+    function createPlatform(x, y, z, w, h, d, color = 0x6ca7ff) {
+      const geometry = new THREE.BoxGeometry(w, h, d);
+      const material = new THREE.MeshStandardMaterial({ color, metalness: 0.2, roughness: 0.5 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      
+      world.platforms.push({
+        mesh,
+        x, y, z, w, h, d
+      });
+      
+      return mesh;
+    }
+
+    function addFinishPad(x, y, z) {
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(2.6, 0.3, 2.6),
+        new THREE.MeshStandardMaterial({ color: 0x41ff68, emissive: 0x1b6d2b, metalness: 0.3 })
+      );
+      pad.position.set(x, y, z);
+      pad.castShadow = true;
+      pad.receiveShadow = true;
+      scene.add(pad);
+
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(1.2, 0.15, 16, 100),
+        new THREE.MeshStandardMaterial({ color: 0x1e8f3d, emissive: 0x2aff4a })
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.set(x, y + 0.3, z);
+      scene.add(ring);
+
+      world.platforms.push({
+        isFinish: true,
+        mesh: pad,
+        x, y, z, w: 2.6, h: 0.3, d: 2.6
+      });
+
+      return { pad, ring };
+    }
+
+    function createLevelData() {
+      const levels = [
+        {
+          name: "Level 1",
+          start: new THREE.Vector3(0, 2, 0),
+          finish: new THREE.Vector3(0, 2, 30),
+          platforms: [
+            { x: 0, y: 0, z: 0, w: 20, h: 1, d: 12, color: 0x5d8cff },
+            { x: -3, y: 2.5, z: 8, w: 5, h: 1, d: 4, color: 0x77a7ff },
+            { x: 3, y: 3.5, z: 14, w: 5, h: 1, d: 4, color: 0x77a7ff },
+            { x: -3, y: 4.5, z: 20, w: 5, h: 1, d: 4, color: 0x77a7ff },
+            { x: 0, y: 5.5, z: 26, w: 6, h: 1, d: 5, color: 0x77a7ff }
+          ]
+        },
+        {
+          name: "Level 2",
+          start: new THREE.Vector3(0, 2, 0),
+          finish: new THREE.Vector3(0, 2.5, 40),
+          platforms: [
+            { x: 0, y: 0, z: 0, w: 18, h: 1, d: 14, color: 0x6ecbd8 },
+            { x: 4, y: 2, z: 8, w: 4, h: 1, d: 4, color: 0x66d6de },
+            { x: -4, y: 3, z: 15, w: 4, h: 1, d: 4, color: 0x66d6de },
+            { x: 4, y: 4, z: 22, w: 4, h: 1, d: 4, color: 0x66d6de },
+            { x: -4, y: 5, z: 29, w: 4, h: 1, d: 4, color: 0x66d6de },
+            { x: 0, y: 6, z: 36, w: 6, h: 1, d: 5, color: 0x66d6de }
+          ]
+        },
+        {
+          name: "Level 3",
+          start: new THREE.Vector3(0, 3, 0),
+          finish: new THREE.Vector3(0, 10, 50),
+          platforms: [
+            { x: 0, y: 0, z: 0, w: 20, h: 1, d: 14, color: 0xffab66 },
+            { x: 0, y: 2, z: 7, w: 5, h: 1, d: 5, color: 0xffbd7a },
+            { x: 5, y: 4, z: 14, w: 5, h: 1, d: 5, color: 0xffbd7a },
+            { x: -5, y: 6, z: 21, w: 5, h: 1, d: 5, color: 0xffbd7a },
+            { x: 5, y: 8, z: 28, w: 5, h: 1, d: 5, color: 0xffbd7a },
+            { x: -5, y: 10, z: 35, w: 5, h: 1, d: 5, color: 0xffbd7a },
+            { x: 0, y: 12, z: 45, w: 6, h: 1, d: 5, color: 0xffbd7a }
+          ]
+        }
+      ];
+
+      return levels.map((level) => {
+        const platforms = level.platforms.map((p) => 
+          createPlatform(p.x, p.y, p.z, p.w, p.h, p.d, p.color)
+        );
+        const finish = addFinishPad(level.finish.x, level.finish.y, level.finish.z);
+        return { ...level, platforms, finish };
+      });
+    }
+
+    world.levels = createLevelData();
+
+    function resetPlayerToStart() {
+      const level = world.levels[world.currentLevel];
+      world.player.pos.copy(level.start);
+      world.player.velocity.set(0, 0, 0);
+      world.player.onGround = false;
+      world.player.groundTimer = 0;
+      playerGroup.position.copy(level.start);
+    }
+
+    function loadLevel(index) {
+      if (index >= world.levels.length) {
+        index = 0;
+      }
+      world.currentLevel = index;
+      
+      const level = world.levels[index];
+      hud.textContent = level.name;
+      message.textContent = "Reach the green finish pad";
+      resetPlayerToStart();
+    }
+
+    function nextLevel() {
+      world.currentLevel += 1;
+      if (world.currentLevel >= world.levels.length) {
+        message.textContent = "🎉 You beat all levels! Press R to replay!";
+        world.currentLevel = 0;
+      }
+      loadLevel(world.currentLevel);
+    }
+
+    function respawnPlayer() {
+      message.textContent = "Fell off! Respawning...";
+      resetPlayerToStart();
+    }
+
+    // Improved collision detection
+    function checkPlatformCollision(newPos) {
+      const p = world.player;
+      const hw = p.width / 2;
+      const hh = p.height / 2;
+      const hd = p.depth / 2;
+
+      let collided = false;
+
+      for (let platform of world.platforms) {
+        const px = platform.x;
+        const py = platform.y;
+        const pz = platform.z;
+        const phw = platform.w / 2;
+        const phh = platform.h / 2;
+        const phd = platform.d / 2;
+
+        const dx = newPos.x - px;
+        const dy = newPos.y - py;
+        const dz = newPos.z - pz;
+
+        // Check if player is within platform bounds
+        const overlapX = Math.abs(dx) < phw + hw;
+        const overlapY = Math.abs(dy) < phh + hh;
+        const overlapZ = Math.abs(dz) < phd + hd;
+
+        if (overlapX && overlapY && overlapZ) {
+          // Determine collision direction
+          const dx_norm = dx / (phw + hw);
+          const dy_norm = dy / (phh + hh);
+          const dz_norm = dz / (phd + hd);
+
+          const abs_dx = Math.abs(dx_norm);
+          const abs_dy = Math.abs(dy_norm);
+          const abs_dz = Math.abs(dz_norm);
+
+          // Check if falling from above (most common case)
+          if (abs_dy > abs_dx && abs_dy > abs_dz) {
+            if (dy_norm > 0) {
+              // Coming from above - landing on platform
+              if (p.velocity.y <= 0.5) {
+                newPos.y = py + phh + hh + 0.01;
+                p.velocity.y = 0;
+                p.onGround = true;
+                p.groundTimer = 0.1;
+                collided = true;
+              }
+            } else {
+              // Hitting from below
+              newPos.y = py - phh - hh;
+              p.velocity.y = 0;
+            }
+          } else if (abs_dx > abs_dz) {
+            // Side collision
+            if (dx_norm > 0) {
+              newPos.x = px + phw + hw + 0.01;
+            } else {
+              newPos.x = px - phw - hw - 0.01;
+            }
+            p.velocity.x *= 0.1;
+          } else {
+            // Front/back collision
+            if (dz_norm > 0) {
+              newPos.z = pz + phd + hd + 0.01;
+            } else {
+              newPos.z = pz - phd - hd - 0.01;
+            }
+            p.velocity.z *= 0.1;
+          }
+        }
+      }
+
+      return collided;
+    }
+
+    function detectFinish() {
+      const level = world.levels[world.currentLevel];
+      const f = level.finish.pad.position;
+      const dx = Math.abs(world.player.pos.x - f.x);
+      const dz = Math.abs(world.player.pos.z - f.z);
+
+      if (dx < 1.5 && dz < 1.5) {
+        nextLevel();
+      }
+    }
+
+    function updatePlayer(dt) {
+      const p = world.player;
+
+      // Input
+      const inputX = (keys["KeyD"] || keys["ArrowRight"] ? 1 : 0) - (keys["KeyA"] || keys["ArrowLeft"] ? 1 : 0);
+      const inputZ = (keys["KeyW"] || keys["ArrowUp"] ? 1 : 0) - (keys["KeyS"] || keys["ArrowDown"] ? 1 : 0);
+
+      // Movement
+      let moveX = inputX * p.speed;
+      let moveZ = inputZ * p.speed;
+
+      p.velocity.x = THREE.MathUtils.lerp(p.velocity.x, moveX, 0.15);
+      p.velocity.z = THREE.MathUtils.lerp(p.velocity.z, moveZ, 0.15);
+
+      // Jump
+      if ((keys["Space"] || keys["KeyJ"]) && (p.onGround || p.groundTimer > 0)) {
+        p.velocity.y = p.jumpForce;
+        p.onGround = false;
+        p.groundTimer = 0;
+      }
+
+      p.groundTimer -= dt;
+      if (p.groundTimer < 0) p.groundTimer = 0;
+
+      // Gravity
+      p.velocity.y -= p.gravity * dt;
+
+      // Update position
+      p.pos.x += p.velocity.x * dt;
+      p.pos.z += p.velocity.z * dt;
+      p.pos.y += p.velocity.y * dt;
+
+      // Boundary limits
+      p.pos.x = Math.max(-30, Math.min(30, p.pos.x));
+      p.pos.z = Math.max(-10, Math.min(100, p.pos.z));
+
+      // Collision
+      p.onGround = false;
+      checkPlatformCollision(p.pos);
+
+      // Death
+      if (p.pos.y < -20) {
+        respawnPlayer();
+        return;
+      }
+
+      // Update visual
+      playerGroup.position.copy(p.pos);
+
+      // Rotation to face movement direction
+      if (Math.abs(p.velocity.x) > 0.5 || Math.abs(p.velocity.z) > 0.5) {
+        const targetRotY = Math.atan2(p.velocity.x, p.velocity.z);
+        playerGroup.rotation.y = THREE.MathUtils.lerp(playerGroup.rotation.y, targetRotY, 0.12);
+      }
+
+      // Detect finish
+      detectFinish();
+    }
+
+    function updateCamera() {
+      const p = world.player.pos;
+      const cameraDistance = 20;
+      const cameraHeight = 8;
+      
+      const targetX = p.x;
+      const targetY = p.y + cameraHeight;
+      const targetZ = p.z - cameraDistance;
+
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.1);
+      camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.1);
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZ, 0.1);
+      
+      camera.lookAt(p.x, p.y + 0.5, p.z + 5);
+    }
+
+    function animate() {
+      const dt = Math.min(0.016, clock.getDelta());
+      updatePlayer(dt);
+      updateCamera();
+
+      const t = clock.elapsedTime;
+      const level = world.levels[world.currentLevel];
+      if (level.finish) {
+        level.finish.ring.rotation.z = t * 2.5;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    const clock = new THREE.Clock();
+    loadLevel(0);
+    renderer.setAnimationLoop(animate);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "KeyR") {
+        resetPlayerToStart();
+      }
+    });
+  </script>
+</body>
+</html>
